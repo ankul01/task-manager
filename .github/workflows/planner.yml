@@ -7,6 +7,10 @@ on:
         description: "A small, non-sensitive product requirement"
         required: true
         type: string
+      model:
+        description: "Gemini model to use"
+        required: false
+        type: string
 
 permissions: {}
 
@@ -19,6 +23,7 @@ jobs:
       - name: Ask Gemini for a plan
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ inputs.model || vars.GEMINI_MODEL || 'gemini-4-hydrogen' }}
           REQUIREMENT: ${{ inputs.requirement }}
         shell: bash
         run: |
@@ -33,9 +38,13 @@ jobs:
 
           key = os.environ.get("GEMINI_API_KEY")
           requirement = os.environ["REQUIREMENT"]
+          model = os.environ.get("GEMINI_MODEL", "gemini-4-hydrogen").strip()
 
           if not key:
               sys.exit("GEMINI_API_KEY is not configured.")
+
+          if not model:
+              sys.exit("GEMINI_MODEL must not be empty.")
 
           prompt = f"""You are a software planning assistant.
 
@@ -55,7 +64,7 @@ jobs:
 
           url = (
               "https://generativelanguage.googleapis.com/v1beta/"
-              "models/gemini-3.6-flash:generateContent"
+              f"models/{model}:generateContent"
           )
 
           body = json.dumps({
@@ -72,14 +81,16 @@ jobs:
               method="POST",
           )
 
-          # One initial attempt, followed by up to three retries for HTTP 503.
+          print(f"Using model: {model}")
+
+          # One initial attempt, followed by up to three retries for HTTP 503 and HTTP 429.
           for attempt in range(4):
               try:
-                  with urllib.request.urlopen(request, timeout=60) as response:
+                  with urllib.request.urlopen(request, timeout=120) as response:
                       result = json.load(response)
                   break
               except urllib.error.HTTPError as error:
-                  if error.code == 503 and attempt < 3:
+                  if error.code in (429, 503) and attempt < 3:
                       delay = (2 ** (attempt + 1)) + random.uniform(0, 1)
                       print(
                           f"Gemini temporarily unavailable; "
