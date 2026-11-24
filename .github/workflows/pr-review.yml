@@ -37,11 +37,12 @@ jobs:
       - name: Checkout PR branch
         uses: actions/checkout@v4
 
-      - name: Fetch PR diff and run OpenAI review
+      - name: Fetch PR diff and run Gemini review
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6-luna' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-4-hydrogen' }}
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BODY: ${{ github.event.pull_request.body }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -60,15 +61,15 @@ jobs:
           import urllib.error
           import urllib.request
 
-          api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-          model = os.environ.get("OPENAI_MODEL", "gpt-6.2-sol").strip()
+          key = os.environ.get("GEMINI_API_KEY", "").strip()
+          model = os.environ.get("GEMINI_MODEL", "gemini-4-hydrogen").strip()
           pr_body = os.environ.get("PR_BODY", "")
           run_url = os.environ["RUN_URL"]
 
-          if not api_key:
-              sys.exit("OPENAI_API_KEY secret is not configured.")
+          if not key:
+              sys.exit("GEMINI_API_KEY is not configured.")
           if not model:
-              sys.exit("OPENAI_MODEL is empty.")
+              sys.exit("GEMINI_MODEL is empty.")
 
           diff_text = pathlib.Path("/tmp/pr.diff").read_text(encoding="utf-8", errors="replace")
           if not diff_text.strip():
@@ -87,7 +88,7 @@ jobs:
               if plan_path.exists():
                   plan_context = f"Approved Plan ({plan_path}):\n\n" + plan_path.read_text(encoding="utf-8")
 
-          print(f"Running OpenAI code review with model: {model}")
+          print(f"Running Gemini code review with model: {model}")
 
           instructions = """You are a senior Java/Spring Boot code reviewer for an automated software factory.
           Review the PR diff against the approved plan (if provided). Focus on correctness, missing acceptance criteria,
@@ -110,7 +111,9 @@ jobs:
 
           If there are no blocking issues, write "None" under Blocking Issues and set Verdict to `APPROVED`."""
 
-          user_input = f"""{plan_context}
+          user_prompt = f"""{instructions}
+
+          {plan_context}
 
           ---
           ### Pull Request Diff
@@ -118,18 +121,17 @@ jobs:
           {diff_text}
           ```"""
 
-          payload = json.dumps({
-              "model": model,
-              "instructions": instructions,
-              "input": user_input,
+          url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+          body = json.dumps({
+              "contents": [{"parts": [{"text": user_prompt}]}]
           }).encode("utf-8")
 
           request = urllib.request.Request(
-              "https://api.openai.com/v1/responses",
-              data=payload,
+              url,
+              data=body,
               headers={
                   "Content-Type": "application/json",
-                  "Authorization": f"Bearer {api_key}",
+                  "x-goog-api-key": key,
               },
               method="POST",
           )
@@ -140,27 +142,24 @@ jobs:
                       result = json.load(response)
                   break
               except urllib.error.HTTPError as error:
-                  err_body = error.read().decode("utf-8", errors="replace")[:300]
                   if error.code in (429, 503) and attempt < 3:
                       delay = (2 ** (attempt + 1)) + random.uniform(0, 1)
-                      print(f"OpenAI returned HTTP {error.code}; retrying in {delay:.1f}s.")
+                      print(f"Gemini returned HTTP {error.code}; retrying in {delay:.1f}s.")
                       time.sleep(delay)
                   else:
-                      sys.exit(f"OpenAI API failed: HTTP {error.code} — {err_body}")
+                      err_body = error.read().decode("utf-8", errors="replace")[:300]
+                      sys.exit(f"Gemini API request failed: HTTP {error.code} — {err_body}")
               except urllib.error.URLError:
-                  sys.exit("Could not reach the OpenAI API.")
+                  sys.exit("Could not reach the Gemini API.")
 
-          # Extract text from Responses API output items
-          review_chunks = []
-          for item in result.get("output", []):
-              if item.get("type") == "message":
-                  for part in item.get("content", []):
-                      if part.get("type") == "output_text":
-                          review_chunks.append(part.get("text", ""))
+          candidates = result.get("candidates", [])
+          if not candidates:
+              sys.exit("Gemini returned no review. Check model access and quota.")
 
-          review_text = "\n".join(review_chunks).strip()
+          parts = candidates[0].get("content", {}).get("parts", [])
+          review_text = "\n".join(part.get("text", "") for part in parts).strip()
           if not review_text:
-              sys.exit("OpenAI returned an empty review.")
+              sys.exit("Gemini returned an empty review.")
 
           comment = (
               f"{review_text}\n\n"
@@ -173,6 +172,7 @@ jobs:
       - name: Post review comment to PR
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         shell: bash
         run: gh pr comment "$PR_NUMBER" --body-file /tmp/review_body.md
