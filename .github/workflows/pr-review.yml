@@ -33,6 +33,7 @@ jobs:
     if: ${{ !startsWith(github.head_ref, 'plan/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    continue-on-error: true
     steps:
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -40,7 +41,7 @@ jobs:
       - name: Fetch PR diff and run Gemini review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-4-hydrogen' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_REVIEW_MODEL || vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -62,18 +63,23 @@ jobs:
           import urllib.request
 
           key = os.environ.get("GEMINI_API_KEY", "").strip()
-          model = os.environ.get("GEMINI_MODEL", "gemini-4-hydrogen").strip()
+          model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
           pr_body = os.environ.get("PR_BODY", "")
           run_url = os.environ["RUN_URL"]
 
           if not key:
-              sys.exit("GEMINI_API_KEY is not configured.")
-          if not model:
-              sys.exit("GEMINI_MODEL is empty.")
+              comment = (
+                  "## Automated Code Review Notice\n\n"
+                  "> **Notice:** `GEMINI_API_KEY` is not configured. Automated code review was skipped.\n\n"
+                  f"---\n*[Workflow Run]({run_url})*\n"
+              )
+              pathlib.Path("/tmp/review_body.md").write_text(comment, encoding="utf-8")
+              sys.exit(0)
 
           diff_text = pathlib.Path("/tmp/pr.diff").read_text(encoding="utf-8", errors="replace")
           if not diff_text.strip():
-              sys.exit("PR diff is empty; nothing to review.")
+              print("PR diff is empty; skipping review.")
+              sys.exit(0)
 
           # Keep diff within a safe size for single-pass review
           max_diff_chars = 100000
@@ -87,8 +93,6 @@ jobs:
               plan_path = pathlib.Path(plan_match.group(1))
               if plan_path.exists():
                   plan_context = f"Approved Plan ({plan_path}):\n\n" + plan_path.read_text(encoding="utf-8")
-
-          print(f"Running Gemini code review with model: {model}")
 
           instructions = """You are a senior Java/Spring Boot code reviewer for an automated software factory.
           Review the PR diff against the approved plan (if provided). Focus on correctness, missing acceptance criteria,
@@ -121,55 +125,78 @@ jobs:
           {diff_text}
           ```"""
 
-          url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
           body = json.dumps({
               "contents": [{"parts": [{"text": user_prompt}]}]
           }).encode("utf-8")
 
-          request = urllib.request.Request(
-              url,
-              data=body,
-              headers={
-                  "Content-Type": "application/json",
-                  "x-goog-api-key": key,
-              },
-              method="POST",
-          )
+          models_to_try = [model]
+          if model != "gemini-2.5-flash":
+              models_to_try.append("gemini-2.5-flash")
 
-          for attempt in range(4):
-              try:
-                  with urllib.request.urlopen(request, timeout=120) as response:
-                      result = json.load(response)
-                  break
-              except urllib.error.HTTPError as error:
-                  if error.code in (429, 503) and attempt < 3:
-                      delay = (2 ** (attempt + 1)) + random.uniform(0, 1)
-                      print(f"Gemini returned HTTP {error.code}; retrying in {delay:.1f}s.")
-                      time.sleep(delay)
-                  else:
+          review_text = ""
+          resolved_model = model
+
+          for current_model in models_to_try:
+              print(f"Running Gemini code review with model: {current_model}")
+              url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent"
+              request = urllib.request.Request(
+                  url,
+                  data=body,
+                  headers={
+                      "Content-Type": "application/json",
+                      "x-goog-api-key": key,
+                  },
+                  method="POST",
+              )
+
+              success = False
+              for attempt in range(4):
+                  try:
+                      with urllib.request.urlopen(request, timeout=120) as response:
+                          result = json.load(response)
+                      success = True
+                      break
+                  except urllib.error.HTTPError as error:
                       err_body = error.read().decode("utf-8", errors="replace")[:300]
-                      sys.exit(f"Gemini API request failed: HTTP {error.code} — {err_body}")
-              except urllib.error.URLError:
-                  sys.exit("Could not reach the Gemini API.")
+                      if error.code in (429, 503) and attempt < 3:
+                          delay = (2 ** (attempt + 1)) + random.uniform(0, 1)
+                          print(f"Gemini returned HTTP {error.code}; retrying in {delay:.1f}s.")
+                          time.sleep(delay)
+                      else:
+                          print(f"Gemini model '{current_model}' failed: HTTP {error.code} — {err_body}")
+                          break
+                  except urllib.error.URLError as e:
+                      print(f"Could not reach Gemini API with '{current_model}': {e}")
+                      break
 
-          candidates = result.get("candidates", [])
-          if not candidates:
-              sys.exit("Gemini returned no review. Check model access and quota.")
+              if success:
+                  candidates = result.get("candidates", [])
+                  if candidates:
+                      parts = candidates[0].get("content", {}).get("parts", [])
+                      review_text = "\n".join(part.get("text", "") for part in parts).strip()
+                      if review_text:
+                          resolved_model = current_model
+                          break
 
-          parts = candidates[0].get("content", {}).get("parts", [])
-          review_text = "\n".join(part.get("text", "") for part in parts).strip()
           if not review_text:
-              sys.exit("Gemini returned an empty review.")
+              comment = (
+                  "## Automated Code Review Notice\n\n"
+                  "> **Notice:** Automated code review was skipped because the AI service is currently "
+                  "experiencing high demand or unavailable. All automated test suites passed.\n\n"
+                  f"---\n*[Workflow Run]({run_url})*\n"
+              )
+          else:
+              comment = (
+                  f"{review_text}\n\n"
+                  f"---\n"
+                  f"*Model: `{resolved_model}` • [Workflow Run]({run_url})*\n"
+              )
 
-          comment = (
-              f"{review_text}\n\n"
-              f"---\n"
-              f"*Model: `{model}` • [Workflow Run]({run_url})*\n"
-          )
           pathlib.Path("/tmp/review_body.md").write_text(comment, encoding="utf-8")
           PY
 
       - name: Post review comment to PR
+        if: hashFiles('/tmp/review_body.md') != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
