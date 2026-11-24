@@ -1,0 +1,94 @@
+name: Package, Smoke Test, and Deploy Staging
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-and-smoke-test:
+    # Run on manual dispatch OR when a non-plan PR is actually merged to main
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true && !startsWith(github.head_ref, 'plan/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Package Spring Boot JAR
+        if: hashFiles('pom.xml') != ''
+        run: mvn -B package -DskipTests
+
+      - name: Live Boot Smoke Test
+        if: hashFiles('pom.xml') != ''
+        shell: bash
+        run: |
+          JAR_FILE=$(ls target/*.jar | grep -v '\.original$' | head -n 1)
+          if [ -z "$JAR_FILE" ]; then
+            echo "No executable JAR found in target/"
+            exit 1
+          fi
+
+          echo "Starting $JAR_FILE for live smoke test..."
+          SERVER_PORT=8080 java -jar "$JAR_FILE" > /tmp/app.log 2>&1 &
+          APP_PID=$!
+          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+
+          # Poll up to 30 seconds for Spring Boot to accept HTTP traffic
+          for i in $(seq 1 15); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/actuator/health || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Smoke test passed: /actuator/health returned 200."
+              exit 0
+            fi
+            # Fallback check if Spring Actuator is not included in pom.xml
+            TASKS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/tasks || true)
+            if [ "$TASKS_STATUS" = "200" ]; then
+              echo "Smoke test passed: /tasks returned 200."
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Application failed to respond within 30s. Startup logs:"
+          cat /tmp/app.log
+          exit 1
+
+      - name: Publish Versioned GitHub Release
+        if: hashFiles('pom.xml') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: v0.1.${{ github.run_number }}
+        shell: bash
+        run: |
+          JAR_FILE=$(ls target/*.jar | grep -v '\.original$' | head -n 1)
+          gh release create "$TAG_NAME" "$JAR_FILE" \
+            --target "${{ github.sha }}" \
+            --title "Release $TAG_NAME" \
+            --notes "Automated release from commit ${{ github.sha }} after live smoke test."
+
+      - name: Trigger External Staging Deploy Hook (Optional)
+        env:
+          STAGING_DEPLOY_HOOK: ${{ secrets.STAGING_DEPLOY_HOOK }}
+        shell: bash
+        run: |
+          if [ -z "$STAGING_DEPLOY_HOOK" ]; then
+            echo "STAGING_DEPLOY_HOOK secret not set; skipping external cloud deploy."
+            exit 0
+          fi
+          curl -fsS -X POST "$STAGING_DEPLOY_HOOK"
+          echo "Triggered external staging deployment."
