@@ -25,7 +25,9 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import random
           import sys
+          import time
           import urllib.error
           import urllib.request
 
@@ -55,6 +57,7 @@ jobs:
               "https://generativelanguage.googleapis.com/v1beta/"
               "models/gemini-3.8-flash:generateContent"
           )
+
           body = json.dumps({
               "contents": [{"parts": [{"text": prompt}]}]
           }).encode("utf-8")
@@ -69,13 +72,26 @@ jobs:
               method="POST",
           )
 
-          try:
-              with urllib.request.urlopen(request, timeout=60) as response:
-                  result = json.load(response)
-          except urllib.error.HTTPError as error:
-              sys.exit(f"Gemini API request failed: HTTP {error.code}")
-          except urllib.error.URLError:
-              sys.exit("Could not reach the Gemini API.")
+          # One initial attempt, followed by up to three retries for HTTP 503.
+          for attempt in range(4):
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      result = json.load(response)
+                  break
+              except urllib.error.HTTPError as error:
+                  if error.code == 503 and attempt < 3:
+                      delay = (2 ** (attempt + 1)) + random.uniform(0, 1)
+                      print(
+                          f"Gemini temporarily unavailable; "
+                          f"retrying in {delay:.1f}s."
+                      )
+                      time.sleep(delay)
+                  else:
+                      sys.exit(
+                          f"Gemini API request failed: HTTP {error.code}"
+                      )
+              except urllib.error.URLError:
+                  sys.exit("Could not reach the Gemini API.")
 
           candidates = result.get("candidates", [])
           if not candidates:
@@ -83,6 +99,7 @@ jobs:
 
           parts = candidates[0].get("content", {}).get("parts", [])
           text = "\n".join(part.get("text", "") for part in parts).strip()
+
           if not text:
               sys.exit("Gemini returned an empty response.")
 
