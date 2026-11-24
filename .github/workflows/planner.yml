@@ -1,0 +1,91 @@
+name: Plan a requirement
+
+on:
+  workflow_dispatch:
+    inputs:
+      requirement:
+        description: "A small, non-sensitive product requirement"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Ask Gemini for a plan
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          REQUIREMENT: ${{ inputs.requirement }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          key = os.environ.get("GEMINI_API_KEY")
+          requirement = os.environ["REQUIREMENT"]
+
+          if not key:
+              sys.exit("GEMINI_API_KEY is not configured.")
+
+          prompt = f"""You are a software planning assistant.
+
+          Produce a concise plan for the requirement below. Include:
+          1. Clarifying questions and assumptions
+          2. Scope and non-goals
+          3. Testable acceptance criteria
+          4. Proposed implementation steps
+          5. Test cases, risks, and a rollback approach
+
+          Do not claim to have inspected a repository.
+          Do not write or execute code.
+
+          Requirement:
+          {requirement}
+          """
+
+          url = (
+              "https://generativelanguage.googleapis.com/v1beta/"
+              "models/gemini-2.5-flash:generateContent"
+          )
+          body = json.dumps({
+              "contents": [{"parts": [{"text": prompt}]}]
+          }).encode("utf-8")
+
+          request = urllib.request.Request(
+              url,
+              data=body,
+              headers={
+                  "Content-Type": "application/json",
+                  "x-goog-api-key": key,
+              },
+              method="POST",
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  result = json.load(response)
+          except urllib.error.HTTPError as error:
+              sys.exit(f"Gemini API request failed: HTTP {error.code}")
+          except urllib.error.URLError:
+              sys.exit("Could not reach the Gemini API.")
+
+          candidates = result.get("candidates", [])
+          if not candidates:
+              sys.exit("Gemini returned no plan. Check model access and quota.")
+
+          parts = candidates[0].get("content", {}).get("parts", [])
+          text = "\n".join(part.get("text", "") for part in parts).strip()
+          if not text:
+              sys.exit("Gemini returned an empty response.")
+
+          print("=== PROPOSED PLAN: HUMAN REVIEW REQUIRED ===")
+          print(text)
+          PY
