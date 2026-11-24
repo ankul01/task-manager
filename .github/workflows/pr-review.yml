@@ -1,0 +1,178 @@
+name: PR Tests and AI Code Review
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    if: ${{ !startsWith(github.head_ref, 'plan/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run Maven tests
+        if: hashFiles('pom.xml') != ''
+        run: mvn -B test
+
+  ai-review:
+    if: ${{ !startsWith(github.head_ref, 'plan/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Fetch PR diff and run OpenAI review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6-luna' }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          gh pr diff "$PR_NUMBER" > /tmp/pr.diff
+
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import random
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+          model = os.environ.get("OPENAI_MODEL", "gpt-6.2-sol").strip()
+          pr_body = os.environ.get("PR_BODY", "")
+          run_url = os.environ["RUN_URL"]
+
+          if not api_key:
+              sys.exit("OPENAI_API_KEY secret is not configured.")
+          if not model:
+              sys.exit("OPENAI_MODEL is empty.")
+
+          diff_text = pathlib.Path("/tmp/pr.diff").read_text(encoding="utf-8", errors="replace")
+          if not diff_text.strip():
+              sys.exit("PR diff is empty; nothing to review.")
+
+          # Keep diff within a safe size for single-pass review
+          max_diff_chars = 100000
+          if len(diff_text) > max_diff_chars:
+              diff_text = diff_text[:max_diff_chars] + "\n\n... [DIFF TRUNCATED]"
+
+          # If the PR references an approved plan in docs/plans/, load it for contract verification
+          plan_context = "No approved plan file referenced in PR body."
+          plan_match = re.search(r"(docs/plans/[A-Za-z0-9._-]+\.md)", pr_body)
+          if plan_match:
+              plan_path = pathlib.Path(plan_match.group(1))
+              if plan_path.exists():
+                  plan_context = f"Approved Plan ({plan_path}):\n\n" + plan_path.read_text(encoding="utf-8")
+
+          print(f"Running OpenAI code review with model: {model}")
+
+          instructions = """You are a senior Java/Spring Boot code reviewer for an automated software factory.
+          Review the PR diff against the approved plan (if provided). Focus on correctness, missing acceptance criteria,
+          security/validation bugs, edge cases, and test quality. Ignore trivial formatting nitpicks.
+
+          Output strictly in this Markdown structure so a downstream coding agent can fix blocking issues:
+
+          ## Automated Code Review Summary
+          - **Approved Plan Checked:** <path or "None referenced">
+          - **Verdict:** `CHANGES_REQUESTED` or `APPROVED`
+
+          ### Blocking Issues (Must Fix Before Merge)
+          - **[P0/P1] <Short title>**
+            - **File:** `<path>` (Lines X–Y)
+            - **Violated Requirement / Bug:** <exact issue>
+            - **Action for Coding Agent:** <exact, concrete fix + test to add>
+
+          ### Non-Blocking Suggestions (Optional)
+          - **[P2] <Short title>** — <brief note>
+
+          If there are no blocking issues, write "None" under Blocking Issues and set Verdict to `APPROVED`."""
+
+          user_input = f"""{plan_context}
+
+          ---
+          ### Pull Request Diff
+          ```diff
+          {diff_text}
+          ```"""
+
+          payload = json.dumps({
+              "model": model,
+              "instructions": instructions,
+              "input": user_input,
+          }).encode("utf-8")
+
+          request = urllib.request.Request(
+              "https://api.openai.com/v1/responses",
+              data=payload,
+              headers={
+                  "Content-Type": "application/json",
+                  "Authorization": f"Bearer {api_key}",
+              },
+              method="POST",
+          )
+
+          for attempt in range(4):
+              try:
+                  with urllib.request.urlopen(request, timeout=120) as response:
+                      result = json.load(response)
+                  break
+              except urllib.error.HTTPError as error:
+                  err_body = error.read().decode("utf-8", errors="replace")[:300]
+                  if error.code in (429, 503) and attempt < 3:
+                      delay = (2 ** (attempt + 1)) + random.uniform(0, 1)
+                      print(f"OpenAI returned HTTP {error.code}; retrying in {delay:.1f}s.")
+                      time.sleep(delay)
+                  else:
+                      sys.exit(f"OpenAI API failed: HTTP {error.code} — {err_body}")
+              except urllib.error.URLError:
+                  sys.exit("Could not reach the OpenAI API.")
+
+          # Extract text from Responses API output items
+          review_chunks = []
+          for item in result.get("output", []):
+              if item.get("type") == "message":
+                  for part in item.get("content", []):
+                      if part.get("type") == "output_text":
+                          review_chunks.append(part.get("text", ""))
+
+          review_text = "\n".join(review_chunks).strip()
+          if not review_text:
+              sys.exit("OpenAI returned an empty review.")
+
+          comment = (
+              f"{review_text}\n\n"
+              f"---\n"
+              f"*Model: `{model}` • [Workflow Run]({run_url})*\n"
+          )
+          pathlib.Path("/tmp/review_body.md").write_text(comment, encoding="utf-8")
+          PY
+
+      - name: Post review comment to PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: gh pr comment "$PR_NUMBER" --body-file /tmp/review_body.md
