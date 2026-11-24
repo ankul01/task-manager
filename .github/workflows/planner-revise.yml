@@ -13,6 +13,8 @@ jobs:
   revise:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      GH_REPO: ${{ github.repository }}
     if: |
       github.event.issue.pull_request != null &&
       github.actor == github.repository_owner &&
@@ -23,6 +25,7 @@ jobs:
         id: pr_info
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
         shell: bash
         run: |
