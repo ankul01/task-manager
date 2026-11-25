@@ -1,0 +1,200 @@
+{
+  "global_timeout_sec": 540,
+  "profiles": {
+    "planner": {
+      "routes": [
+        {
+          "name": "gemini-hydrogen",
+          "adapter": "gemini",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta",
+          "model": "gemini-4-hydrogen",
+          "api_key_env": "GEMINI_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 15
+        },
+        {
+          "name": "nvidia-deepseek",
+          "adapter": "openai_compat",
+          "base_url": "https://integrate.api.nvidia.com/v1",
+          "model": "deepseek-ai/deepseek-v4.1-flash",
+          "api_key_env": "NVIDIA_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "nvidia-nemotron",
+          "adapter": "openai_compat",
+          "base_url": "https://integrate.api.nvidia.com/v1",
+          "model": "nvidia/nemotron-3-ultra-550b-a55b",
+          "api_key_env": "NVIDIA_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "gemini-flash",
+          "adapter": "gemini",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta",
+          "model": "gemini-3.8-flash",
+          "api_key_env": "GEMINI_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "groq-oss",
+          "adapter": "openai_compat",
+          "base_url": "https://api.groq.com/openai/v1",
+          "model": "openai/gpt-oss-120b",
+          "api_key_env": "GROQ_API_KEY",
+          "max_input_chars": 20000,
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "openai-fallback",
+          "adapter": "openai_responses",
+          "base_url": "https://api.openai.com/v1",
+          "model": "gpt-6-luna",
+          "api_key_env": "OPENAI_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        }
+      ]
+    },
+    "reviewer": {
+      "routes": [
+        {
+          "name": "gemini-hydrogen",
+          "adapter": "gemini",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta",
+          "model": "gemini-4-hydrogen",
+          "api_key_env": "GEMINI_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 15
+        },
+        {
+          "name": "nvidia-deepseek",
+          "adapter": "openai_compat",
+          "base_url": "https://integrate.api.nvidia.com/v1",
+          "model": "deepseek-ai/deepseek-v4.1-flash",
+          "api_key_env": "NVIDIA_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "nvidia-nemotron",
+          "adapter": "openai_compat",
+          "base_url": "https://integrate.api.nvidia.com/v1",
+          "model": "nvidia/nemotron-3-ultra-550b-a55b",
+          "api_key_env": "NVIDIA_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "gemini-flash",
+          "adapter": "gemini",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta",
+          "model": "gemini-3.8-flash",
+          "api_key_env": "GEMINI_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "groq-oss",
+          "adapter": "openai_compat",
+          "base_url": "https://api.groq.com/openai/v1",
+          "model": "openai/gpt-oss-120b",
+          "api_key_env": "GROQ_API_KEY",
+          "max_input_chars": 20000,
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "openai-fallback",
+          "adapter": "openai_responses",
+          "base_url": "https://api.openai.com/v1",
+          "model": "gpt-6-luna",
+          "api_key_env": "OPENAI_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        }
+      ]
+    },
+    "default": {
+      "routes": [
+        {
+          "name": "gemini-hydrogen",
+          "adapter": "gemini",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta",
+          "model": "gemini-4-hydrogen",
+          "api_key_env": "GEMINI_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 15
+        },
+        {
+          "name": "nvidia-deepseek",
+          "adapter": "openai_compat",
+          "base_url": "https://integrate.api.nvidia.com/v1",
+          "model": "deepseek-ai/deepseek-v4.1-flash",
+          "api_key_env": "NVIDIA_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "nvidia-nemotron",
+          "adapter": "openai_compat",
+          "base_url": "https://integrate.api.nvidia.com/v1",
+          "model": "nvidia/nemotron-3-ultra-550b-a55b",
+          "api_key_env": "NVIDIA_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "gemini-flash",
+          "adapter": "gemini",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta",
+          "model": "gemini-3.8-flash",
+          "api_key_env": "GEMINI_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "groq-oss",
+          "adapter": "openai_compat",
+          "base_url": "https://api.groq.com/openai/v1",
+          "model": "openai/gpt-oss-120b",
+          "api_key_env": "GROQ_API_KEY",
+          "max_input_chars": 20000,
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        },
+        {
+          "name": "openai-fallback",
+          "adapter": "openai_responses",
+          "base_url": "https://api.openai.com/v1",
+          "model": "gpt-6-luna",
+          "api_key_env": "OPENAI_API_KEY",
+          "timeout_sec": 120,
+          "retries": 1,
+          "backoff_sec": 10
+        }
+      ]
+    }
+  }
+}
