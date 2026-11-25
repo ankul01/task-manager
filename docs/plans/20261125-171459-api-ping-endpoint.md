@@ -6,6 +6,7 @@ model: nvidia/nemotron-3-ultra-550b-a55b
 route_name: nvidia-nemotron
 workflow_run_url: https://github.com/ankul01/task-manager/actions/runs/45662678290
 requirement: "Add a lightweight GET /api/ping REST endpoint to task-manager for pipeline smoke testing.\n\nRequirements:\n1. Expose GET /api/ping returning HTTP 200 OK with Content-Type application/json and exact JSON body:\n   {\"status\":\"pong\",\"service\":\"task-manager\"}\n2. Keep it completely stateless inside a small controller class (e.g., PingController). Do NOT modify any database schema, entities, repositories, or existing endpoints, and do NOT add new Maven dependencies.\n3. If Spring Security is configured in the project, permit unauthenticated GET access to /api/ping; otherwise keep standard controller behavior.\n4. Add one focused controller test class (PingControllerTest) using @WebMvcTest and MockMvc verifying HTTP 200 and both JSON fields (\"status\" = \"pong\", \"service\" = \"task-manager\").\n5. Verify mvn test passes cleanly."
+revised_at: "2026-11-25T17:22:08Z"
 ---
 
 # Draft Plan: 20261125-171459-api-ping-endpoint
@@ -15,7 +16,7 @@ requirement: "Add a lightweight GET /api/ping REST endpoint to task-manager for 
 ## 1. Clarifying Questions & Assumptions
 | # | Question / Assumption | Resolution |
 |---|-----------------------|------------|
-| 1 | **Spring Boot version & packaging** – assumes a standard Spring Boot 2.x/3.x web MVC project (spring-boot-starter-web) with Maven. | Proceed with standard annotations (`@RestController`, `@GetMapping`). |
+| 1 | **Spring Boot version & packaging** – confirmed Spring Boot 3.x (per `pom.xml`) with Maven. | Proceed with standard annotations (`@RestController`, `@GetMapping`). |
 | 2 | **Spring Security presence** – the codebase may or may not have `spring-boot-starter-security`. | If Security is on classpath, add a minimal permit rule; otherwise no config change. |
 | 3 | **Base package for component scan** – controller will be placed under the existing base package (e.g., `com.example.taskmanager`). | Use existing package structure; no new package needed. |
 | 4 | **Existing test suite** – assumes JUnit 5 + Spring Test + MockMvc are already on test classpath (typical for Spring Boot). | No new test dependencies. |
