@@ -413,5 +413,129 @@ class TestNonTransientFatalError(unittest.TestCase):
         self.assertEqual(result.route_name, "backup-route")
 
 
+class TestModelOverrideRouting(unittest.TestCase):
+    """TC-6: --model-override uses a single-route bypass, inheriting adapter/base_url from profile."""
+
+    def test_model_override_uses_matched_route_adapter(self):
+        route1 = _make_route(
+            name="gemini-hydrogen",
+            adapter="gemini",
+            base_url="https://api.gemini.example.com/v1beta",
+            model="gemini-4-hydrogen",
+            api_key_env="GEMINI_KEY",
+        )
+        route2 = _make_route(
+            name="openai-fallback",
+            adapter="openai_responses",
+            base_url="https://api.openai.example.com/v1",
+            model="gpt-6-luna",
+            api_key_env="OPENAI_KEY",
+        )
+        router = _FakeRouter([route1, route2])
+
+        ok_body = json.dumps(_gemini_response("override response")).encode()
+
+        def fake_urlopen(req, timeout=None):
+            fp = io.BytesIO(ok_body)
+            cm = unittest.mock.MagicMock()
+            cm.__enter__ = lambda s: fp
+            cm.__exit__ = unittest.mock.MagicMock(return_value=False)
+            return cm
+
+        with unittest.mock.patch.dict(os.environ, {"GEMINI_KEY": "g-key"}):
+            with unittest.mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                result = router.generate(
+                    user_prompt="hello",
+                    model_override="gemini-4-hydrogen",
+                )
+
+        # Must use the matched route's adapter and base_url
+        self.assertEqual(result.text, "override response")
+        self.assertEqual(result.adapter, "gemini")
+        self.assertEqual(result.model, "gemini-4-hydrogen")
+        # tier_index is 0 because override collapses to a single-route waterfall
+        self.assertEqual(result.tier_index, 0)
+
+    def test_model_override_with_explicit_adapter_override(self):
+        """Explicit --adapter-override takes precedence over profile match."""
+        route1 = _make_route(
+            name="gemini-hydrogen",
+            adapter="gemini",
+            base_url="https://api.gemini.example.com/v1beta",
+            model="gemini-4-hydrogen",
+            api_key_env="GEMINI_KEY",
+        )
+        router = _FakeRouter([route1])
+
+        ok_body = json.dumps(_openai_response("compat override")).encode()
+
+        def fake_urlopen(req, timeout=None):
+            fp = io.BytesIO(ok_body)
+            cm = unittest.mock.MagicMock()
+            cm.__enter__ = lambda s: fp
+            cm.__exit__ = unittest.mock.MagicMock(return_value=False)
+            return cm
+
+        with unittest.mock.patch.dict(os.environ, {"GEMINI_KEY": "g-key"}):
+            with unittest.mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                result = router.generate(
+                    user_prompt="hello",
+                    model_override="gemini-4-hydrogen",
+                    adapter_override="openai_compat",
+                )
+
+        self.assertEqual(result.text, "compat override")
+        self.assertEqual(result.adapter, "openai_compat")
+
+
+class TestOpenAIResponsesTopLevelFallback(unittest.TestCase):
+    """TC-7: OpenAIResponsesAdapter falls back to top-level output_text field."""
+
+    def test_top_level_output_text_fallback(self):
+        """When output array has no output_text chunks, falls back to root output_text."""
+        route = _make_route(adapter="openai_responses")
+
+        # Response with no output_text in nested content, only top-level
+        response_body = {
+            "output": [
+                {"type": "other_item", "content": [{"type": "not_output_text", "text": "ignored"}]},
+            ],
+            "output_text": "Top-level fallback text",
+        }
+        raw = json.dumps(response_body).encode()
+        fp = io.BytesIO(raw)
+        cm = unittest.mock.MagicMock()
+        cm.__enter__ = lambda s: fp
+        cm.__exit__ = unittest.mock.MagicMock(return_value=False)
+
+        with unittest.mock.patch("urllib.request.urlopen", return_value=cm):
+            result = OpenAIResponsesAdapter().invoke(route, "key", "", "prompt", 10.0)
+
+        self.assertEqual(result, "Top-level fallback text")
+
+    def test_null_content_field_does_not_crash(self):
+        """content: null in an output item must not raise TypeError."""
+        route = _make_route(adapter="openai_responses")
+
+        response_body = {
+            "output": [
+                {"type": "message", "content": None},          # null content
+                {"type": "message", "content": [
+                    {"type": "output_text", "text": "good chunk"}
+                ]},
+            ]
+        }
+        raw = json.dumps(response_body).encode()
+        fp = io.BytesIO(raw)
+        cm = unittest.mock.MagicMock()
+        cm.__enter__ = lambda s: fp
+        cm.__exit__ = unittest.mock.MagicMock(return_value=False)
+
+        with unittest.mock.patch("urllib.request.urlopen", return_value=cm):
+            result = OpenAIResponsesAdapter().invoke(route, "key", "", "prompt", 10.0)
+
+        self.assertEqual(result, "good chunk")
+
+
 if __name__ == "__main__":
     unittest.main()

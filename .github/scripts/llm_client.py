@@ -142,7 +142,7 @@ class GeminiAdapter(ProviderAdapter):
         candidates = result.get("candidates", [])
         if not candidates:
             raise ValueError("Gemini returned no candidates")
-        parts = candidates[0].get("content", {}).get("parts", [])
+        parts = (candidates[0].get("content") or {}).get("parts") or []
         text = "\n".join(p.get("text", "") for p in parts).strip()
         if not text:
             raise ValueError("Gemini returned empty text")
@@ -178,7 +178,7 @@ class OpenAICompatAdapter(ProviderAdapter):
         choices = result.get("choices", [])
         if not choices:
             raise ValueError("OpenAI-compat returned no choices")
-        text = choices[0].get("message", {}).get("content", "").strip()
+        text = ((choices[0].get("message") or {}).get("content") or "").strip()
         if not text:
             raise ValueError("OpenAI-compat returned empty content")
         return text
@@ -218,7 +218,7 @@ class OpenAIResponsesAdapter(ProviderAdapter):
         for item in output:
             # item may be {"type": "message", "content": [{"type": "output_text", "text": "…"}]}
             if isinstance(item, dict):
-                for content_block in item.get("content", []):
+                for content_block in (item.get("content") or []):
                     if isinstance(content_block, dict) and content_block.get("type") == "output_text":
                         chunks.append(content_block.get("text", ""))
         text = "".join(chunks).strip()
@@ -287,6 +287,8 @@ class LLMRouter:
             sys.exit(f"[ERROR] Profile '{profile}' not found in config. "
                      f"Available: {list(profiles.keys())}")
         raw_routes = profiles[profile].get("routes", [])
+        if not raw_routes:
+            sys.exit(f"[ERROR] Profile '{profile}' has no routes configured.")
         routes = []
         for r in raw_routes:
             routes.append(RouteConfig(
@@ -429,7 +431,7 @@ class LLMRouter:
                     )
 
                 except urllib.error.HTTPError as exc:
-                    body_snippet = exc.read().decode("utf-8", errors="replace")[:300]
+                    body_snippet = (exc.read() or b"").decode("utf-8", errors="replace")[:300]
                     last_error = f"HTTP {exc.code}: {body_snippet}"
                     if exc.code in _FATAL_CODES:
                         print(f"[FAIL] {route.name} attempt {attempts}: "

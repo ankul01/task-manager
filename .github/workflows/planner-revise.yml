@@ -63,7 +63,6 @@ jobs:
         env:
           PLAN_PATH:    ${{ steps.pr_info.outputs.plan_path }}
           COMMENT_BODY: ${{ github.event.comment.body }}
-          RUN_URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
           python3 - <<'PY'

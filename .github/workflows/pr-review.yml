@@ -66,8 +66,14 @@ jobs:
           diff_text = pathlib.Path("/tmp/pr.diff").read_text(encoding="utf-8", errors="replace")
           if not diff_text.strip():
               print("PR diff is empty; skipping review.")
+              # Write sentinel so downstream steps can detect no-diff case
               pathlib.Path("/tmp/prompt.txt").write_text("", encoding="utf-8")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as gho:
+                  gho.write("has_diff=false\n")
               import sys; sys.exit(0)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gho:
+              gho.write("has_diff=true\n")
 
           # Keep diff within a safe size for single-pass review
           max_diff_chars = 100000
@@ -119,6 +125,10 @@ jobs:
 
       - name: Run AI review via LLM waterfall
         id: ai_review
+        # continue-on-error so Assemble + Post steps always run and can post
+        # a "service unavailable" notice even when all LLM routes fail
+        continue-on-error: true
+        if: steps.prep.outputs.has_diff == 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
@@ -126,10 +136,6 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
-          if [ ! -s /tmp/prompt.txt ]; then
-            echo "Empty prompt; skipping LLM call."
-            exit 0
-          fi
           python3 .github/scripts/llm_client.py \
             --profile reviewer \
             --system-file /tmp/system.txt \
@@ -138,6 +144,8 @@ jobs:
             --meta-file   /tmp/meta.json
 
       - name: Assemble review comment
+        # Always run (even if LLM step failed) so we can post the fallback notice
+        if: always() && steps.prep.outputs.has_diff == 'true'
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
@@ -173,6 +181,7 @@ jobs:
           PY
 
       - name: Post review comment to PR
+        if: always() && steps.prep.outputs.has_diff == 'true'
         env:
           GH_TOKEN:  ${{ github.token }}
           GH_REPO:   ${{ github.repository }}

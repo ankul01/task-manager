@@ -91,14 +91,21 @@ jobs:
           NVIDIA_API_KEY:  ${{ secrets.NVIDIA_API_KEY }}
           GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
           OPENAI_API_KEY:  ${{ secrets.OPENAI_API_KEY }}
+          # Pass model override through env to avoid shell injection from raw inputs.*
+          MODEL_OVERRIDE:  ${{ inputs.model }}
         shell: bash
         run: |
-          MODEL_OVERRIDE="${{ inputs.model }}"
-          ARGS="--profile planner --prompt-file /tmp/prompt.txt --output-file /tmp/llm_out.txt --meta-file /tmp/meta.json"
+          # Build args array with quoted expansions to prevent word-splitting
+          args=(
+            --profile planner
+            --prompt-file /tmp/prompt.txt
+            --output-file /tmp/llm_out.txt
+            --meta-file   /tmp/meta.json
+          )
           if [ -n "$MODEL_OVERRIDE" ]; then
-            ARGS="$ARGS --model-override $MODEL_OVERRIDE"
+            args+=(--model-override "$MODEL_OVERRIDE")
           fi
-          python3 .github/scripts/llm_client.py $ARGS
+          python3 .github/scripts/llm_client.py "${args[@]}"
 
       - name: Assemble plan document and PR body
         id: assemble
