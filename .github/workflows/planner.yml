@@ -12,7 +12,7 @@ on:
         required: false
         type: string
       model:
-        description: "Optional Gemini model override (defaults to vars.GEMINI_MODEL)"
+        description: "Optional model override (e.g. gemini-3.8-flash). Activates single-route mode."
         required: false
         type: string
 
@@ -22,18 +22,15 @@ permissions:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-slim
+    timeout-minutes: 12
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate draft plan with Gemini
-        id: generate
+      - name: Build prompt file
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ inputs.model || vars.GEMINI_MODEL || 'gemini-4-hydrogen' }}
           REQUIREMENT: ${{ inputs.requirement }}
           RAW_SLUG: ${{ inputs.slug }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -44,23 +41,13 @@ jobs:
           import json
           import os
           import pathlib
-          import random
           import re
           import sys
-          import time
-          import urllib.error
-          import urllib.request
 
-          key = os.environ.get("GEMINI_API_KEY", "").strip()
-          model = os.environ.get("GEMINI_MODEL", "").strip()
           requirement = os.environ["REQUIREMENT"].strip()
-          raw_slug = os.environ.get("RAW_SLUG", "").strip()
-          run_url = os.environ["RUN_URL"]
+          raw_slug    = os.environ.get("RAW_SLUG", "").strip()
+          run_url     = os.environ["RUN_URL"]
 
-          if not key:
-              sys.exit("GEMINI_API_KEY is not configured.")
-          if not model:
-              sys.exit("GEMINI_MODEL is empty.")
           if not requirement:
               sys.exit("Requirement input is empty.")
 
@@ -68,12 +55,11 @@ jobs:
           slug_source = raw_slug if raw_slug else " ".join(requirement.split()[:5])
           slug = re.sub(r"[^a-z0-9]+", "-", slug_source.lower()).strip("-")[:40] or "plan"
           timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
-          plan_id = f"{timestamp}-{slug}"
+          plan_id   = f"{timestamp}-{slug}"
 
-          print(f"Using Gemini model: {model}")
           print(f"Plan ID: {plan_id}")
 
-          prompt = f"""You are a software planning assistant.
+          user_prompt = f"""You are a software planning assistant.
 
           Produce a concise plan for the requirement below. Include:
           1. Clarifying questions and assumptions
@@ -89,55 +75,65 @@ jobs:
           {requirement}
           """
 
-          url = (
-              f"https://generativelanguage.googleapis.com/v1beta/"
-              f"models/{model}:generateContent"
+          pathlib.Path("/tmp/prompt.txt").write_text(user_prompt, encoding="utf-8")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"plan_id={plan_id}\n")
+              out.write(f"plan_path=docs/plans/{plan_id}.md\n")
+              out.write(f"branch_name=plan/{plan_id}\n")
+          PY
+        id: prep
+
+      - name: Generate draft plan via LLM waterfall
+        id: generate
+        env:
+          GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
+          NVIDIA_API_KEY:  ${{ secrets.NVIDIA_API_KEY }}
+          GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY:  ${{ secrets.OPENAI_API_KEY }}
+          # Pass model override through env to avoid shell injection from raw inputs.*
+          MODEL_OVERRIDE:  ${{ inputs.model }}
+        shell: bash
+        run: |
+          # Build args array with quoted expansions to prevent word-splitting
+          args=(
+            --profile planner
+            --prompt-file /tmp/prompt.txt
+            --output-file /tmp/llm_out.txt
+            --meta-file   /tmp/meta.json
           )
+          if [ -n "$MODEL_OVERRIDE" ]; then
+            args+=(--model-override "$MODEL_OVERRIDE")
+          fi
+          python3 .github/scripts/llm_client.py "${args[@]}"
 
-          body = json.dumps({
-              "contents": [{"parts": [{"text": prompt}]}]
-          }).encode("utf-8")
+      - name: Assemble plan document and PR body
+        id: assemble
+        env:
+          PLAN_ID:   ${{ steps.prep.outputs.plan_id }}
+          PLAN_PATH: ${{ steps.prep.outputs.plan_path }}
+          RUN_URL:   ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REQUIREMENT: ${{ inputs.requirement }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import datetime
+          import json
+          import os
+          import pathlib
 
-          request = urllib.request.Request(
-              url,
-              data=body,
-              headers={
-                  "Content-Type": "application/json",
-                  "x-goog-api-key": key,
-              },
-              method="POST",
-          )
+          plan_id     = os.environ["PLAN_ID"]
+          plan_path   = pathlib.Path(os.environ["PLAN_PATH"])
+          run_url     = os.environ["RUN_URL"]
+          requirement = os.environ["REQUIREMENT"]
 
-          for attempt in range(4):
-              try:
-                  with urllib.request.urlopen(request, timeout=120) as response:
-                      result = json.load(response)
-                  break
-              except urllib.error.HTTPError as error:
-                  if error.code in (429, 503) and attempt < 3:
-                      delay = (2 ** (attempt + 1)) + random.uniform(0, 1)
-                      print(f"Gemini returned HTTP {error.code}; retrying in {delay:.1f}s.")
-                      time.sleep(delay)
-                  else:
-                      sys.exit(f"Gemini API request failed: HTTP {error.code}")
-              except urllib.error.URLError:
-                  sys.exit("Could not reach the Gemini API.")
+          meta = json.loads(pathlib.Path("/tmp/meta.json").read_text(encoding="utf-8"))
+          model      = meta["model"]
+          route_name = meta["route_name"]
 
-          candidates = result.get("candidates", [])
-          if not candidates:
-              sys.exit("Gemini returned no plan. Check model access and quota.")
-
-          parts = candidates[0].get("content", {}).get("parts", [])
-          text = "\n".join(part.get("text", "") for part in parts).strip()
-          if not text:
-              sys.exit("Gemini returned an empty response.")
-
-          plans_dir = pathlib.Path("docs/plans")
-          plans_dir.mkdir(parents=True, exist_ok=True)
-          plan_path = plans_dir / f"{plan_id}.md"
-
-          created_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-          safe_req_yaml = json.dumps(requirement)
+          text        = pathlib.Path("/tmp/llm_out.txt").read_text(encoding="utf-8").strip()
+          created_at  = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          safe_req    = json.dumps(requirement)
 
           document = (
               f"---\n"
@@ -145,8 +141,9 @@ jobs:
               f"status: draft\n"
               f"created_at: {created_at}\n"
               f"model: {model}\n"
+              f"route_name: {route_name}\n"
               f"workflow_run_url: {run_url}\n"
-              f"requirement: {safe_req_yaml}\n"
+              f"requirement: {safe_req}\n"
               f"---\n\n"
               f"# Draft Plan: {plan_id}\n\n"
               f"> **Human Review Required:** Merging this Pull Request to the default branch "
@@ -154,14 +151,14 @@ jobs:
               f"{text}\n"
           )
 
+          plan_path.parent.mkdir(parents=True, exist_ok=True)
           plan_path.write_text(document, encoding="utf-8")
 
-          # Write a safe PR body file (never interpolate untrusted text into bash)
           pr_body = (
               f"## Draft Plan Ready for Review\n\n"
               f"- **Plan ID:** `{plan_id}`\n"
               f"- **File:** `{plan_path.as_posix()}`\n"
-              f"- **Model:** `{model}`\n"
+              f"- **Model:** `{model}` (route: `{route_name}`)\n"
               f"- **Workflow Run:** {run_url}\n\n"
               f"### Approval Rule\n"
               f"Review the Markdown file in the **Files changed** tab. "
@@ -169,22 +166,17 @@ jobs:
               f"Click **Merge pull request** only when you approve this exact version for Phase 2 implementation.\n"
           )
           pathlib.Path("/tmp/pr_body.md").write_text(pr_body, encoding="utf-8")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"plan_id={plan_id}\n")
-              out.write(f"plan_path={plan_path.as_posix()}\n")
-              out.write(f"branch_name=plan/{plan_id}\n")
           PY
 
       - name: Commit plan and open Pull Request
         env:
-          GH_TOKEN: ${{ github.token }}
-          PLAN_ID: ${{ steps.generate.outputs.plan_id }}
-          PLAN_PATH: ${{ steps.generate.outputs.plan_path }}
-          BRANCH_NAME: ${{ steps.generate.outputs.branch_name }}
+          GH_TOKEN:    ${{ github.token }}
+          PLAN_ID:     ${{ steps.prep.outputs.plan_id }}
+          PLAN_PATH:   ${{ steps.prep.outputs.plan_path }}
+          BRANCH_NAME: ${{ steps.prep.outputs.branch_name }}
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git checkout -b "$BRANCH_NAME"
