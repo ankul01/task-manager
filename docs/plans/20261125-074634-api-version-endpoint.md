@@ -6,6 +6,7 @@ model: nvidia/nemotron-3-ultra-550b-a55b
 route_name: nvidia-nemotron
 workflow_run_url: https://github.com/ankul01/task-manager/actions/runs/45570758801
 requirement: "Add a single read-only GET /api/version endpoint that returns HTTP 200 with JSON {\"service\": \"task-manager\", \"version\": \"0.1.0\", \"javaVersion\": \"<current JVM version>\"}, plus one @WebMvcTest MockMvc test verifying HTTP 200 and all three JSON fields. Keep the plan brief with zero open questions and do not modify existing entities, repositories, or database configuration."
+revised_at: "2026-11-25T07:49:53Z"
 ---
 
 # Draft Plan: 20261125-074634-api-version-endpoint
@@ -17,7 +18,7 @@ requirement: "Add a single read-only GET /api/version endpoint that returns HTTP
 ---
 
 ### 1. Clarifying Questions & Assumptions
-- **Assumption**: Spring Boot 3.x, Java 17+, Spring Web MVC stack.
+- **Assumption**: Spring Boot 3.x, Java 21, Spring Web MVC stack.
 - **Assumption**: Version string "0.1.0" is static (from `build.properties` or hard-coded constant).
 - **Assumption**: `javaVersion` sourced at runtime via `System.getProperty("java.version")`.
 - **Assumption**: No authentication/authorization required for this endpoint.
@@ -30,7 +31,7 @@ requirement: "Add a single read-only GET /api/version endpoint that returns HTTP
 |----------|--------------|
 | New `VersionController` with `GET /api/version` | Database changes, entities, repositories |
 | `@WebMvcTest` for `VersionController` | Integration tests, actuator endpoints |
-| JSON response with 3 fields | Version auto-increment, Git metadata |
+| JSON response with 4 fields (service, version, javaVersion, status) | Version auto-increment, Git metadata |
 | HTTP 200 only | Error handling (no failure paths) |
 
 ---
@@ -43,18 +44,19 @@ requirement: "Add a single read-only GET /api/version endpoint that returns HTTP
    {
      "service": "task-manager",
      "version": "0.1.0",
-     "javaVersion": "<runtime JVM version>"
+     "javaVersion": "<runtime JVM version>",
+     "status": "up"
    }
    ```
-4. `@WebMvcTest` passes asserting status, content-type, and all three fields.
+4. `@WebMvcTest` passes asserting status, content-type, and all four fields.
 
 ---
 
 ### 4. Implementation Steps
-1. **Create DTO/Record** `VersionResponse(service: String, version: String, javaVersion: String)`.
+1. **Create DTO/Record** `VersionResponse(service: String, version: String, javaVersion: String, status: String)`.
 2. **Create `VersionController`**:
    - `@RestController @RequestMapping("/api")`
-   - `GET /version` → returns `VersionResponse("task-manager", "0.1.0", System.getProperty("java.version"))`.
+   - `GET /version` → returns `VersionResponse("task-manager", "0.1.0", System.getProperty("java.version"), "up")`.
 3. **Add `@WebMvcTest(VersionController.class)`** test:
    - `mockMvc.perform(get("/api/version"))`
    - `.andExpect(status().isOk())`
@@ -62,6 +64,7 @@ requirement: "Add a single read-only GET /api/version endpoint that returns HTTP
    - `.andExpect(jsonPath("$.service").value("task-manager"))`
    - `.andExpect(jsonPath("$.version").value("0.1.0"))`
    - `.andExpect(jsonPath("$.javaVersion").exists())`
+   - `.andExpect(jsonPath("$.status").value("up"))`
 4. **Verify** `mvn test` passes.
 
 ---
