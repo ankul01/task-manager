@@ -8,22 +8,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(PingController.class)
-@TestPropertySource(properties = "spring.application.name=task-manager")
 class PingControllerTest {
 
   @Autowired private MockMvc mockMvc;
 
   @Test
-  void apiPingReturnsOkWithServiceNameFromConfiguration() throws Exception {
+  void getApiPingReturnsPongWithServiceName() throws Exception {
     mockMvc
         .perform(get("/api/ping"))
         .andExpect(status().isOk())
         .andExpect(content().contentType("application/json"))
-        .andExpect(jsonPath("$.status").value("ok"))
+        .andExpect(jsonPath("$.status").value("pong"))
         .andExpect(jsonPath("$.service").value("task-manager"));
   }
 }
