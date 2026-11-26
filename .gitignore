@@ -6,3 +6,10 @@
 .settings/
 *.log
 .DS_Store
+
+# env / secrets — never commit
+.env
+.env.local
+.env*.local
+*.pem
+*.key

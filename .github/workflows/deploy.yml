@@ -1,9 +1,8 @@
 name: Package, Smoke Test, and Deploy Staging
 
 on:
-  pull_request:
+  push:
     branches: [main]
-    types: [closed]
     paths-ignore:
       - 'docs/plans/**'
   workflow_dispatch:
@@ -13,10 +12,6 @@ permissions:
 
 jobs:
   release-and-smoke-test:
-    # Run on manual dispatch OR when a non-plan PR is actually merged to main
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.merged == true && !startsWith(github.head_ref, 'plan/'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -74,10 +69,14 @@ jobs:
         if: hashFiles('pom.xml') != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: v0.1.${{ github.run_number }}
+          TAG_NAME: v0.1.${{ github.run_number }}.${{ github.run_attempt }}
         shell: bash
         run: |
           JAR_FILE=$(ls target/*.jar | grep -v '\.original$' | head -n 1)
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME already exists; skipping create."
+            exit 0
+          fi
           gh release create "$TAG_NAME" "$JAR_FILE" \
             --target "${{ github.sha }}" \
             --title "Release $TAG_NAME" \
