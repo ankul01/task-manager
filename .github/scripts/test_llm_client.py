@@ -537,5 +537,79 @@ class TestOpenAIResponsesTopLevelFallback(unittest.TestCase):
         self.assertEqual(result, "good chunk")
 
 
+class TestReasoningAndNimHardening(unittest.TestCase):
+    """Verify max_tokens forwarding, 410 immediate failover, and empty content rejection."""
+
+    def test_reasoning_content_only_fails_over(self):
+        route1 = _make_route(name="nim-glm", adapter="openai_compat", api_key_env="KEY1", retries=0)
+        route2 = _make_route(name="nim-minimax", adapter="openai_compat", api_key_env="KEY2", retries=0)
+        router = _FakeRouter([route1, route2])
+
+        reasoning_only = {
+            "choices": [{"message": {"role": "assistant", "content": "", "reasoning_content": "thinking..."}}]
+        }
+        valid_resp = _openai_response("Final answer")
+        calls = 0
+
+        def fake_urlopen(req, timeout=None):
+            nonlocal calls
+            calls += 1
+            body = reasoning_only if calls == 1 else valid_resp
+            fp = io.BytesIO(json.dumps(body).encode())
+            cm = unittest.mock.MagicMock()
+            cm.__enter__ = lambda s: fp
+            cm.__exit__ = unittest.mock.MagicMock(return_value=False)
+            return cm
+
+        with unittest.mock.patch.dict(os.environ, {"KEY1": "k1", "KEY2": "k2"}):
+            with unittest.mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                result = router.generate(user_prompt="plan")
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(result.text, "Final answer")
+        self.assertEqual(result.route_name, "nim-minimax")
+
+    def test_410_fails_over_immediately(self):
+        route1 = _make_route(name="deprecated-route", adapter="openai_compat", api_key_env="KEY1", retries=3)
+        route2 = _make_route(name="live-route", adapter="openai_compat", api_key_env="KEY2")
+        router = _FakeRouter([route1, route2])
+        calls = 0
+
+        def fake_urlopen(req, timeout=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise _make_http_error(410, "Gone")
+            fp = io.BytesIO(json.dumps(_openai_response("ok")).encode())
+            cm = unittest.mock.MagicMock()
+            cm.__enter__ = lambda s: fp
+            cm.__exit__ = unittest.mock.MagicMock(return_value=False)
+            return cm
+
+        with unittest.mock.patch.dict(os.environ, {"KEY1": "k1", "KEY2": "k2"}):
+            with unittest.mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                result = router.generate(user_prompt="hi")
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(result.route_name, "live-route")
+
+    def test_max_tokens_sent_in_openai_compat_payload(self):
+        route = _make_route(adapter="openai_compat", max_tokens=8192)
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            fp = io.BytesIO(json.dumps(_openai_response("ok")).encode())
+            cm = unittest.mock.MagicMock()
+            cm.__enter__ = lambda s: fp
+            cm.__exit__ = unittest.mock.MagicMock(return_value=False)
+            return cm
+
+        with unittest.mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            OpenAICompatAdapter().invoke(route, "key", "", "prompt", 10.0)
+
+        self.assertEqual(captured["body"]["max_tokens"], 8192)
+
+
 if __name__ == "__main__":
     unittest.main()
