@@ -48,6 +48,7 @@ class RouteConfig:
     retries: int = 1
     backoff_sec: float = 10.0
     max_input_chars: Optional[int] = None
+    max_tokens: Optional[int] = None
 
 
 @dataclasses.dataclass
@@ -66,11 +67,11 @@ class LLMResponse:
 # ---------------------------------------------------------------------------
 
 _TRANSIENT_CODES = {429, 500, 502, 503, 504}
-_FATAL_CODES = {400, 401, 403, 404}
+_FATAL_CODES = {400, 401, 403, 404, 410}
 
 
 def _is_transient(code: int) -> bool:
-    return code in _TRANSIENT_CODES
+    return code in _TRANSIENT_CODES or 500 <= code < 600
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +132,8 @@ class GeminiAdapter(ProviderAdapter):
             payload["systemInstruction"] = {
                 "parts": [{"text": system_prompt}]
             }
+        if route.max_tokens is not None:
+            payload["generationConfig"] = {"maxOutputTokens": route.max_tokens}
 
         body = json.dumps(payload).encode("utf-8")
         headers = {
@@ -167,7 +170,9 @@ class OpenAICompatAdapter(ProviderAdapter):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
 
-        payload = {"model": route.model, "messages": messages}
+        payload: dict = {"model": route.model, "messages": messages}
+        if route.max_tokens is not None:
+            payload["max_tokens"] = route.max_tokens
         body = json.dumps(payload).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
@@ -178,6 +183,7 @@ class OpenAICompatAdapter(ProviderAdapter):
         choices = result.get("choices", [])
         if not choices:
             raise ValueError("OpenAI-compat returned no choices")
+        # Require non-empty final content; reasoning_content alone is not a valid answer.
         text = ((choices[0].get("message") or {}).get("content") or "").strip()
         if not text:
             raise ValueError("OpenAI-compat returned empty content")
@@ -203,6 +209,8 @@ class OpenAIResponsesAdapter(ProviderAdapter):
         }
         if system_prompt:
             payload["instructions"] = system_prompt
+        if route.max_tokens is not None:
+            payload["max_output_tokens"] = route.max_tokens
 
         body = json.dumps(payload).encode("utf-8")
         headers = {
@@ -301,6 +309,7 @@ class LLMRouter:
                 retries=int(r.get("retries", 1)),
                 backoff_sec=float(r.get("backoff_sec", 10)),
                 max_input_chars=r.get("max_input_chars"),
+                max_tokens=int(r["max_tokens"]) if r.get("max_tokens") is not None else None,
             ))
         return routes, global_timeout
 
@@ -314,6 +323,7 @@ class LLMRouter:
         adapter: str,
         base_url: str,
         api_key_env: str,
+        max_tokens: Optional[int] = None,
     ) -> RouteConfig:
         return RouteConfig(
             name=f"override-{model}",
@@ -324,6 +334,7 @@ class LLMRouter:
             timeout_sec=120,
             retries=1,
             backoff_sec=10,
+            max_tokens=max_tokens,
         )
 
     # ------------------------------------------------------------------
@@ -349,11 +360,13 @@ class LLMRouter:
             override_adapter = adapter_override or (matched.adapter if matched else "gemini")
             override_base_url = base_url_override or (matched.base_url if matched else routes[0].base_url)
             override_key_env = api_key_env_override or (matched.api_key_env if matched else routes[0].api_key_env)
+            override_max_tokens = matched.max_tokens if matched else (4096 if profile == "reviewer" else 8192)
             routes = [self._build_override_route(
                 model=model_override,
                 adapter=override_adapter,
                 base_url=override_base_url,
                 api_key_env=override_key_env,
+                max_tokens=override_max_tokens,
             )]
 
         global_deadline = time.monotonic() + global_timeout
@@ -514,6 +527,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     parser = _build_arg_parser()
     args = parser.parse_args()
 
