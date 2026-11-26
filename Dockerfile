@@ -14,6 +14,8 @@ FROM --platform=linux/amd64 eclipse-temurin:21-jre-alpine
 
 RUN addgroup -S app && adduser -S app -G app
 
+WORKDIR /app
+
 COPY --from=builder /tmp/app.jar /app/app.jar
 RUN chown app:app /app/app.jar
 
