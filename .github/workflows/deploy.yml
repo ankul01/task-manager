@@ -56,6 +56,6 @@ jobs:
     uses: ankul01/agent-factory/.github/workflows/reusable-deploy-render.yml@main
     with:
       staging_url: ${{ vars.RENDER_STAGING_URL }}
-      health_path: /api/ping
+      health_path: /actuator/health
       image_name: task-manager
     secrets: inherit

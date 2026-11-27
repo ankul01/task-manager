@@ -5,4 +5,4 @@ services:
     plan: free
     image:
       url: ghcr.io/ankul01/task-manager:latest
-    healthCheckPath: /api/ping
+    healthCheckPath: /actuator/health
