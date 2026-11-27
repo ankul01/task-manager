@@ -1,0 +1,7 @@
+archetype: backend-java
+deploy_lane: render-ghcr
+health_path: /actuator/health
+test_command: "mvn -B test"
+protected_paths:
+  - ".github/workflows/**"
+plan_dir: docs/plans

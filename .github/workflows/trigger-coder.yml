@@ -14,77 +14,14 @@ jobs:
   launch-cursor-coder:
     # Fires ONLY when a plan/* PR is actually merged to main
     if: github.event.pull_request.merged == true && startsWith(github.head_ref, 'plan/')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - name: Launch Cursor Cloud Agent via API
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-          CURSOR_MODEL: ${{ vars.CURSOR_MODEL }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-          HEAD_REF: ${{ github.head_ref }}
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-          import urllib.error
-          import urllib.request
-
-          api_key = os.environ.get("CURSOR_API_KEY", "").strip()
-          model_id = os.environ.get("CURSOR_MODEL", "").strip()
-          repo_url = os.environ["REPO_URL"]
-          merge_sha = os.environ["MERGE_SHA"]
-          plan_id = os.environ["HEAD_REF"].removeprefix("plan/")
-          plan_path = f"docs/plans/{plan_id}.md"
-
-          if not api_key:
-              sys.exit("CURSOR_API_KEY secret is not configured.")
-
-          prompt_text = f"""You are the Software Developer Agent for this repository.
-
-          Implement the approved specification at `{plan_path}` (approved on `main` at commit `{merge_sha}`).
-
-          Rules:
-          1. Create a new feature branch `feat/{plan_id}` from `main`.
-          2. Implement all tasks cleanly and run the full test suite (`mvn test`) until all tests pass.
-          3. Do NOT modify `{plan_path}`.
-          4. Open a Pull Request targeting `main` that references `{plan_path}` and commit `{merge_sha}` in the PR body, along with test results."""
-
-          payload = {
-              "name": f"Implement {plan_id}"[:100],
-              "prompt": {"text": prompt_text},
-              "env": {"type": "cloud"},
-              "repos": [
-                  {
-                      "url": repo_url,
-                      "startingRef": merge_sha,
-                  }
-              ],
-              "autoCreatePR": True,
-          }
-          if model_id:
-              payload["model"] = {"id": model_id}
-
-          request = urllib.request.Request(
-              "https://api.cursor.com/v1/agents",
-              data=json.dumps(payload).encode("utf-8"),
-              headers={
-                  "Content-Type": "application/json",
-                  "Authorization": f"Bearer {api_key}",
-              },
-              method="POST",
-          )
-
-          try:
-              with urllib.request.urlopen(request, timeout=60) as resp:
-                  result = json.load(resp)
-              print("Cursor Cloud Agent launched successfully:")
-              print(json.dumps(result, indent=2))
-          except urllib.error.HTTPError as err:
-              body = err.read().decode("utf-8", errors="replace")
-              sys.exit(f"Cursor API error HTTP {err.code}: {body}")
-          PY
+    permissions:
+      contents: read
+    uses: ankul01/agent-factory/.github/workflows/reusable-trigger-coder.yml@main
+    with:
+      head_ref: ${{ github.head_ref }}
+      base_ref: ${{ github.base_ref }}
+      merge_commit_sha: ${{ github.event.pull_request.merge_commit_sha }}
+      pr_number: "${{ github.event.pull_request.number }}"
+      pr_body: ${{ github.event.pull_request.body }}
+      cursor_model: ${{ vars.CURSOR_MODEL }}
+    secrets: inherit
