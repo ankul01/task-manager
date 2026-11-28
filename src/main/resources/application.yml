@@ -19,6 +19,7 @@ spring:
 
 server:
   port: 8080
+  forward-headers-strategy: framework
 
 management:
   endpoints:
@@ -28,3 +29,18 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+
+springdoc:
+  cache:
+    disabled: true
+  api-docs:
+    enabled: true
+    path: /openapi.json
+  swagger-ui:
+    enabled: true
+    path: /docs
+    try-it-out-enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+  paths-to-exclude: /actuator/**,/api/ping
+  show-actuator: false
